@@ -1783,6 +1783,7 @@ function renderSlotBuy(){
   btn.disabled = S.g < cost || S.tut<99;
   if(S.tut<99) btn.textContent='チュートリアル後に';
   btn.onclick=()=>{
+    if(S.tut<99 || S.g<cost) return;   // 支払い前ガード
     S.g -= cost; s.owned = true;
     toast('フレームを延長した! 建設枠が増えた');
     blip([392,523],'triangle');
@@ -1842,6 +1843,7 @@ function renderMod(){
     btn.disabled = S.parts<costP || S.g<costG || S.tut<99;
     if(S.tut<99) btn.textContent='チュートリアル後に';
     btn.onclick=()=>{
+      if(S.tut<99 || S.parts<costP || S.g<costG) return;   // 支払い前ガード
       S.parts-=costP; S.g-=costG; s.blv++;
       fxUpgrade(s);
       if(s.b==='hab') S.crewCap += 2;
@@ -1941,9 +1943,10 @@ function renderSub(){
     const cost=SUBCOST[S.subs];
     const btn=document.createElement('button'); btn.className='buyBtn gold';
     btn.textContent=`増艦 ${fmt(cost)}G`;
-    if(S.tut<99){ btn.disabled=true; btn.textContent='チュートリアル後に'; }
-    btn.disabled = S.g<cost;
+    btn.disabled = S.g<cost || S.tut<99;
+    if(S.tut<99) btn.textContent='チュートリアル後に';
     btn.onclick=()=>{
+      if(S.tut<99 || S.g<cost) return;   // 支払い前ガード
       S.g-=cost; S.subs++; asgDirty=true;   // 操縦士をすぐ確保し直す
       toast(`新しい潜水艇が配備された! (${S.subs}/4隻)`);
       blip([523,659,784],'triangle');
@@ -2007,9 +2010,10 @@ function renderSub(){
     } else if(i === S.zoneUnlocked){
       tx.innerHTML=`<b>${z.name} 🔒</b><small>${z.sub}</small><small>解放：研究${z.unlockR}pt + ${z.unlockG}G</small>`;
       const btn=document.createElement('button'); btn.className='buyBtn gold'; btn.textContent='解放する';
-      if(S.tut<99){ btn.disabled=true; btn.textContent='チュートリアル後に'; }
-      btn.disabled = S.r<z.unlockR || S.g<z.unlockG;
+      btn.disabled = S.r<z.unlockR || S.g<z.unlockG || S.tut<99;
+      if(S.tut<99) btn.textContent='チュートリアル後に';
       btn.onclick=()=>{
+        if(S.tut<99 || S.r<z.unlockR || S.g<z.unlockG) return;   // 支払い前ガード(連打・タイミング対策)
         S.r-=z.unlockR; S.g-=z.unlockG; S.zoneUnlocked++;
         toast(`${z.name} を解放した! シャフトが伸びた!`);
         renderSub(); refreshHud();
@@ -2224,8 +2228,13 @@ function renderCrew(){
       ${statRow(c)}<br>${hpBar(c)}<br><span class="job">▶ ${jobOf(c)}</span>`;
     const bye=document.createElement('button'); bye.className='byeBtn'; bye.textContent='送別\n+50G';
     if(c.mermaid){ bye.disabled=true; bye.textContent='永久\n在籍'; }
+    const atSea = S.exps.some(e=>e.pid===c.id) || (S.abyssExp && S.abyssExp.pid===c.id);
+    if(atSea && !c.mermaid){ bye.disabled=true; bye.textContent='出航\n中'; }
     bye.onclick=()=>{
       if(c.mermaid) return;
+      if(S.exps.some(e=>e.pid===c.id) || (S.abyssExp && S.abyssExp.pid===c.id)){
+        toast(`${c.name}は探索から帰るまで送別できない`, true); return;
+      }
       S.crew = S.crew.filter(x=>x.id!==c.id);
       S.g += 50; asgDirty=true;
       toast(`${c.name}が島へ帰っていった… (+50G)`);
@@ -2609,9 +2618,10 @@ function saveData(){
 }
 function applySave(d){
   const awaySec = (d.t ? Math.min((Date.now()-d.t)/1000, 8*3600) : 0);   // るす時間(最大8時間)…探索を進める
-  S.g=d.g||0; S.r=d.r||0; S.parts=d.parts||0; S.tickets=d.tickets||0; S.crewCap=d.crewCap||4;
-  S.life=d.life||{exp:0,gacha:0,earn:0}; S.ach=d.ach||{}; S.login=d.login||{last:'',day:0};
-  S.zoneUnlocked=d.zoneUnlocked||1; S.dex=d.dex||{};
+  const num=(v,def)=>{ const n=Number(v); return Number.isFinite(n) ? n : def; };   // 破損・改ざん対策の数値強制
+  S.g=num(d.g,0); S.r=num(d.r,0); S.parts=num(d.parts,0); S.tickets=num(d.tickets,0); S.crewCap=num(d.crewCap,4);
+  S.life=(d.life && typeof d.life==='object')?d.life:{exp:0,gacha:0,earn:0}; S.ach=d.ach||{}; S.login=d.login||{last:'',day:0};
+  S.zoneUnlocked=Math.min(4, Math.max(1, num(d.zoneUnlocked,1))); S.dex=(d.dex && typeof d.dex==='object')?d.dex:{};
   if((d.slots||[]).length===24){
     // 旧形式(横拡張なし)はpos1スロットに順番どおり復元
     const p1=S.slots.filter(s=>s.pos===1);
@@ -2623,7 +2633,7 @@ function applySave(d){
       S.slots[i].owned = sd.owned!==undefined ? sd.owned : (S.slots[i].pos===1);
     }});
   }
-  S.crew = (d.crew||[]).map(cd=>{
+  S.crew = (Array.isArray(d.crew)?d.crew:[]).map(cd=>{
     const c={id:'c'+(crewSeq++), xp:0, clv:1, hp:100, cond:3, condP:0, sick:false, sickT:0, ...cd};
     if(c.stats && c.stats.humor===undefined) c.stats.humor=Math.max(1, c.star||1);   // 旧セーブ互換
     if(c.skillFx && !c.skillD){ const sp=SPSKILL.find(s=>s.fx===c.skillFx); if(sp) c.skillD=sp.d; }
@@ -2648,7 +2658,7 @@ function applySave(d){
   S.items = d.items||{};
   const bb=d.buffs||{};
   S.buffs = {speed:Date.now()+(bb.speed||0)*1000, gold:Date.now()+(bb.gold||0)*1000, luck2:Date.now()+(bb.luck2||0)*1000};
-  S.exps = (d.exps||[]).map(e=>({zone:e.zone, dur:e.dur, t0: Date.now()-(e.dur-e.rem)*1000 - awaySec*1000, pid:(e.pi>=0 && S.crew[e.pi]) ? S.crew[e.pi].id : undefined}));
+  S.exps = (Array.isArray(d.exps)?d.exps:[]).map(e=>({zone:e.zone, dur:e.dur, t0: Date.now()-(e.dur-e.rem)*1000 - awaySec*1000, pid:(e.pi>=0 && S.crew[e.pi]) ? S.crew[e.pi].id : undefined}));
   if(d.exp) S.exps.push({zone:d.exp.zone, dur:d.exp.dur, t0: Date.now()-(d.exp.dur-d.exp.rem)*1000 - awaySec*1000});  // 旧形式互換
   if(d.mis && d.mis.d && d.mis.w){ S.mis = d.mis; misReset(); }
   asgDirty=true;
