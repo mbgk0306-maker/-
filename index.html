@@ -1329,8 +1329,8 @@ const DEXB = {1:0.3, 2:0.6, 3:1.0, 4:1.6, 5:2.6};   // レア度ごとの人気(
 const popOf = c => c.pop!==undefined ? c.pop : (c.hidden ? 5.0 : DEXB[c.rare]);
 const dexBonus = () => CREATURES.reduce((a,c)=> a + (S.dex[c.id] ? popOf(c) : 0), 0);
 const tankMul     = () => 1 + facPow('tank', 0.08);
-const capIncomeOf = c => (2 + dexBonus()*tankMul()) * (1 + c.stats.tour*0.15);
-const labOutOf    = c => 1 + c.stats.res*0.25;
+const capIncomeOf = c => (1.2 + dexBonus()*0.6*tankMul()) * (1 + c.stats.tour*0.15);   // 全体的に収入を抑制(溜まりすぎ対策)
+const labOutOf    = c => 0.6 + c.stats.res*0.15;   // 研究も抑制
 const lvMult      = s => 1 + 0.08*(s.blv-1);   // +8%/Lv(Lv20で×2.52)
 const lightPow    = () => S.slots.filter(s=>s.b==='light' && facOn(s)).reduce((a,s)=> a + 0.08*lvMult(s)*staffMul(s), 0);
 const facPow      = (k,per) => S.slots.filter(s=>s.b===k && facOn(s)).reduce((a,s)=> a + per*lvMult(s)*staffMul(s), 0);
@@ -2681,17 +2681,41 @@ $('saveDel').onclick=()=>{
 };
 
 // ---------- offline reward ----------
+// るす中も探索は進み、終わった分は自動で解決(放置で図鑑が埋まる)
+function resolveAwayExpeditions(savedT){
+  const now=Date.now();
+  let resolved=0, kept=[];
+  for(const e of S.exps){
+    if(e.t0 + e.dur*1000 <= now){          // るす中に帰還済み → その場で解決
+      const idx=S.exps.indexOf(e);
+      // resolveExpはS.expsからspliceするので、見つけたものを順次処理
+    }
+  }
+  // 帰還済みを古い順に解決(報酬・図鑑・依頼・ヌシ抽選もそのまま走る)
+  let guard=0;
+  while(guard++ < 50){
+    const i=S.exps.findIndex(e=> e.t0 + e.dur*1000 <= now);
+    if(i<0) break;
+    resolveExp(i);
+    resolved++;
+  }
+  // 深層も帰還済みなら解決
+  if(S.abyssExp && S.abyssExp.t0 + S.abyssExp.dur*1000 <= now){ resolveAbyss(); resolved++; }
+  return resolved;
+}
 function computeAway(savedT){
   const el = Math.min((Date.now()-savedT)/1000, 8*3600);   // 最大8時間
-  if(el < 60) return null;
+  // るす中に終わった探索を自動解決(図鑑が進む)…報酬モーダルとは別に常に実行
+  const expDone = resolveAwayExpeditions(savedT);
+  if(el < 60) return expDone ? {el:0, g:0, r:0, eff:0, expDone} : null;
   const A=assignments();
   let gps=0, rps=0;
   S.slots.filter(s=>s.b==='cap').forEach((s,i)=>{ const c=A.caps[i]; if(c) gps+=capIncomeOf(c)*lvMult(s); });
   S.slots.filter(s=>s.b==='lab').forEach((s,i)=>{ const c=A.labs[i]; if(c) rps+=labOutOf(c)*lvMult(s); });
-  return {el, g:Math.floor(gps*el*vaultEff()), r:Math.floor(rps*el*vaultEff()), eff:vaultEff()};
+  const OFFLINE_RATE = 0.25;   // るす中の貯まり速度は稼働時の1/4(さらに抑制)
+  return {el, g:Math.floor(gps*el*vaultEff()*OFFLINE_RATE), r:Math.floor(rps*el*vaultEff()*OFFLINE_RATE), eff:vaultEff()*OFFLINE_RATE, expDone};
 }
 $('awayOk').onclick=()=>{ $('awayModal').classList.remove('open'); checkLogin(); };
-
 // ---------- missions ----------
 const DAILY=[
   {id:'exp3',    name:'潜水艇で3回探索する',        tgt:3,   key:'exp',   rw:{g:200}},
@@ -3556,11 +3580,13 @@ $('startBtn').onclick=()=>{
   let awayShown=false;
   if(pendingAway){
     const aw=pendingAway; pendingAway=null; awayShown=true;
-    S.g+=aw.g; S.r+=aw.r; refreshHud();
+    S.g+=aw.g; S.r+=aw.r; asgDirty=true; refreshHud();
     const h=Math.floor(aw.el/3600), mn=Math.floor((aw.el%3600)/60);
-    $('awayTx').innerHTML=`るすにしていた ${h>0? h+'時間':''}${mn}分のあいだに…<br>`+
+    const expLine = aw.expDone ? `<span style="color:#9fdcff">潜水艇が ${aw.expDone}回 探索から帰ってきた!</span><br>` : '';
+    $('awayTx').innerHTML=(aw.el>=60?`るすにしていた ${h>0? h+'時間':''}${mn}分のあいだに…<br>`:'おかえりなさい!<br>')+
+      expLine+
       `<b style="color:#ffd97a">+${fmt(aw.g)}G</b>　<b style="color:#7fe7d4">研究+${fmt(aw.r)}pt</b><br>`+
-      `<span style="font-size:11px;color:#6fa3d0">(稼働率${Math.round((aw.eff||0.5)*100)}%・最大8時間ぶん)</span>`;
+      `<span style="font-size:11px;color:#6fa3d0">(るす中の稼ぎは稼働時の25%・最大8時間ぶん)</span>`;
     $('awayModal').classList.add('open');
   }
   if(freshGame){
